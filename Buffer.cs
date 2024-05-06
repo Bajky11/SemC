@@ -11,6 +11,7 @@ namespace SemC
         private List<int> data = new List<int>();
         private int capacity;
         public string name;
+        private bool debug = false;
 
         public Buffer(int capacity, string name)
         {
@@ -21,10 +22,11 @@ namespace SemC
         public void Add(int item)
         {
             data.Add(item);
-            Console.WriteLine($"{name} capacity ({data.Count})");
+            if (debug) Console.WriteLine($"{name} capacity ({data.Count})");
             if (data.Count == capacity)
             {
-                Console.WriteLine($"{name} is full");
+                if (debug) Console.WriteLine($"{name} is full");
+                if (false) foreach (int one in data) Console.Write(one);
             }
         }
 
@@ -33,9 +35,19 @@ namespace SemC
             return data.Count == capacity;
         }
 
+        public bool IsEmpty()
+        {
+            return data.Count == 0;
+        }
+
         public void Clear()
         {
             data.Clear();
+        }
+
+        public int Count()
+        {
+            return data.Count;
         }
 
         public IEnumerable<int> Items => data;

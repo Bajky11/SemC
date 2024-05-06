@@ -8,151 +8,155 @@ using System.Threading.Tasks;
 
 class Program
 {
+
     private static SemaphoreSlim semaphore = new SemaphoreSlim(1, 1);
     private static string fileName = "data.txt";
-    private static int bufferSize = 3;
-    private static int dataSize = 10;
-    private static int numTrials = 1;
-    private static bool performanceTest = false;
+    private static int bufferSize = 10000; //5, 1000000
+    private static int dataSize = 10000000; //100, 10000000
+    private static int NUM_TRIALS = 10;
+    private static bool RUN_PERFORMANCE_TEST = true;
     private static bool debug = false;
+    static Generator generator = new();
+    static Stopwatch stopwatchG = new Stopwatch();
+    static Stopwatch waitTimerG = new Stopwatch();
+    static Stopwatch fileMetricsTimerG = new Stopwatch();
 
     static async Task Main(string[] args)
     {
-        var (doubleAverageTime, doubleAverageWaitTime) = await PerformanceTest(DoubleBufferSave, removeOldFile: true);
-        Console.WriteLine($"Double buffer method average completed in {doubleAverageTime} ms with average wait time of {doubleAverageWaitTime} ms.");
+        Console.WriteLine("Starting tests...");
 
-        var (singleAverageTime, singleAverageWaitTime) = await PerformanceTest(SingleBufferSave, removeOldFile: true);
-        Console.WriteLine($"Single buffer method average completed in {singleAverageTime} ms with average wait time of {singleAverageWaitTime} ms.");
+        await TestWriteToFile();
+        await TestReadFromFile();
 
-        if (performanceTest)
+        if (RUN_PERFORMANCE_TEST)
         {
-            Console.WriteLine($"Starting performance comparison over {numTrials} trials.");
-
-            //var (singleAverageTime, singleAverageWaitTime) = await PerformanceTest(SingleBufferSave, removeOldFile: true);
-            Console.WriteLine($"Single buffer method average completed in {singleAverageTime} ms with average wait time of {singleAverageWaitTime} ms.");
-
-            //var (doubleAverageTime, doubleAverageWaitTime) = await PerformanceTest(DoubleBufferSave, removeOldFile: true);
-            Console.WriteLine($"Double buffer method average completed in {doubleAverageTime} ms with average wait time of {doubleAverageWaitTime} ms.");
-
-            var (doubleLoadAverageTime, doubleLoadAverageWaitTime) = await PerformanceTest(DoubleBufferLoad);
-            Console.WriteLine($"Double buffer load method average completed in {doubleLoadAverageTime} ms with average wait time of {doubleLoadAverageWaitTime} ms.");
-
-            Console.WriteLine("Performance comparison completed.");
-        }
-    }
-
-    static async Task<(double, double)> PerformanceTest(Func<Task<(long, long)>> saveMethod, bool removeOldFile = false)
-    {
-        long totalExecutionTime = 0;
-        long totalWaitTime = 0;
-
-        for (int i = 0; i < numTrials; i++)
-        {
-            if (removeOldFile) File.Delete(fileName); // Reset file for each trial
-            var (executionTime, waitTime) = await saveMethod();
-            totalExecutionTime += executionTime;
-            totalWaitTime += waitTime;
+            await PerformanceTest(NUM_TRIALS);
         }
 
-        return ((double)totalExecutionTime / numTrials, (double)totalWaitTime / numTrials);
+        Console.WriteLine("\nAll tests completed.");
     }
 
-    static async Task<(long, long)> SingleBufferSave()
+    static async Task TestReadFromFile()
     {
-        Stopwatch stopwatch = Stopwatch.StartNew();
-        Stopwatch waitTimer = new Stopwatch();
-        long totalWaitTime = 0;
+        Console.WriteLine("\nTesting single buffer read:");
+        var singleTime = await ReadFromFile(useDoubleBuffering: false);
+        Console.WriteLine($"Single buffer method completed in {singleTime} ms.");
 
-        SemC.Buffer buffer = new SemC.Buffer(bufferSize, "Buffer 1");
-        for (int i = 0; i < dataSize; i++)
+        Console.WriteLine("\nTesting double buffer read:");
+        var doubleTime = await ReadFromFile(useDoubleBuffering: true);
+        Console.WriteLine($"Double buffer method completed in {doubleTime} ms.");
+    }
+
+    static async Task TestWriteToFile()
+    {
+        Console.WriteLine("\nTesting single buffer write:");
+        var singleTime = await WriteToFile(useDoubleBuffering: false);
+        Console.WriteLine($"Single buffer method completed in {singleTime} ms.");
+
+        Console.WriteLine("\nTesting double buffer write:");
+        var doubleTime = await WriteToFile(useDoubleBuffering: true);
+        Console.WriteLine($"Double buffer method completed in {doubleTime} ms.");
+    }
+
+    static async Task PerformanceTest(int iterations)
+    {
+        Console.WriteLine($"\nPerformance test for {iterations} trials:");
+        long totalSingleWriteTime = 0, totalDoubleWriteTime = 0;
+        long totalSingleReadTime = 0, totalDoubleReadTime = 0;
+
+        for (int i = 0; i < iterations; i++)
         {
-            buffer.Add(i);
-            if (buffer.IsFull() || i == dataSize - 1)
-            {
-                waitTimer.Restart();
-                await SaveToFile(buffer.Items.ToList(), buffer.name);
-                waitTimer.Stop();
-                totalWaitTime += waitTimer.ElapsedMilliseconds;
+            // Test writing to file
+            File.Delete(fileName);
+            var singleWriteTime = await WriteToFile(useDoubleBuffering: false);
+            totalSingleWriteTime += singleWriteTime;
 
-                buffer.Clear();
-            }
+            File.Delete(fileName);
+            var doubleWriteTime = await WriteToFile(useDoubleBuffering: true);
+            totalDoubleWriteTime += doubleWriteTime;
+
+            // Test reading from file
+            var singleReadTime = await ReadFromFile(useDoubleBuffering: false);
+            totalSingleReadTime += singleReadTime;
+
+            var doubleReadTime = await ReadFromFile(useDoubleBuffering: true);
+            totalDoubleReadTime += doubleReadTime;
         }
 
-        stopwatch.Stop();
-        return (stopwatch.ElapsedMilliseconds, totalWaitTime);
+        // Printing write results
+        Console.WriteLine($"Average write time for single buffer: {totalSingleWriteTime / iterations} ms.");
+        Console.WriteLine($"Average write time for double buffer: {totalDoubleWriteTime / iterations} ms.");
+
+        // Printing read results
+        Console.WriteLine($"Average read time for single buffer: {totalSingleReadTime / iterations} ms.");
+        Console.WriteLine($"Average read time for double buffer: {totalDoubleReadTime / iterations} ms.");
     }
 
-
-    static async Task<(long, long)> DoubleBufferSave()
+    static void ResetMetrics()
     {
-        Stopwatch stopwatch = new Stopwatch();
-        Stopwatch waitTimer = new Stopwatch();
-        long totalWaitTime = 0;
+        stopwatchG.Reset();
+        waitTimerG.Reset();
+    }
+
+    static async Task<long> WriteToFile(bool useDoubleBuffering)
+    {
+        generator.Reset();
+        ResetMetrics();
 
         SemC.Buffer bufferOne = new SemC.Buffer(bufferSize, "Buffer 1");
         SemC.Buffer bufferTwo = new SemC.Buffer(bufferSize, "Buffer 2");
         Task bufferOneSaving = Task.CompletedTask;
         Task bufferTwoSaving = Task.CompletedTask;
         int activeBuffer = 1;
-        int counter = 0;
 
-        stopwatch.Restart();
-        while (counter < dataSize)
+        stopwatchG.Start();
+        while (generator.Count() < dataSize)
         {
             if (activeBuffer == 1)
             {
-                waitTimer.Reset();
                 await bufferOneSaving;
-                waitTimer.Stop();
-                totalWaitTime += waitTimer.ElapsedMilliseconds;
-                
-
                 bufferOne.Clear();
-                while (!bufferOne.IsFull() && counter < dataSize)
+
+                while (!bufferOne.IsFull() && generator.Count() < dataSize)
                 {
-                    bufferOne.Add(counter++);
+                    bufferOne.Add(generator.Next());
                 }
                 bufferOneSaving = SaveToFile(bufferOne.Items.ToList(), bufferOne.name);
-                activeBuffer = 2;
+                if (useDoubleBuffering) activeBuffer = 2;
             }
             else
             {
-                waitTimer.Start();
                 await bufferTwoSaving;
-                waitTimer.Stop();
-                totalWaitTime += waitTimer.ElapsedMilliseconds;
-                waitTimer.Reset();
-
                 bufferTwo.Clear();
-                while (!bufferTwo.IsFull() && counter < dataSize)
+
+                while (!bufferTwo.IsFull() && generator.Count() < dataSize)
                 {
-                    bufferTwo.Add(counter++);
+                    bufferTwo.Add(generator.Next());
                 }
                 bufferTwoSaving = SaveToFile(bufferTwo.Items.ToList(), bufferTwo.name);
-                activeBuffer = 1;
+                if (useDoubleBuffering) activeBuffer = 1;
             }
         }
 
         await bufferOneSaving;
         await bufferTwoSaving;
 
-        stopwatch.Stop();
-        return (stopwatch.ElapsedMilliseconds, totalWaitTime);
+        stopwatchG.Stop();
+        return stopwatchG.ElapsedMilliseconds;
     }
 
-    static bool saveDebug = true;
-    static Stopwatch saveStopWatch = new Stopwatch();
+
     static async Task SaveToFile(List<int> buffer, string bufferName)
     {
-        if (semaphore.CurrentCount == 0)
-        {
-            if (saveDebug) Console.WriteLine("Waitig for file");
-        }
+        bool saveDebug = false;
+
+        if (semaphore.CurrentCount == 0) if (saveDebug) Console.WriteLine("Waitig for file");
+
         await semaphore.WaitAsync();
-        if (saveDebug) Console.WriteLine("Starting save");
         try
         {
-            saveStopWatch.Restart();
+            if (saveDebug) Console.WriteLine("Starting save");
+
             using (var fileStream = new FileStream(fileName, FileMode.Append, FileAccess.Write, FileShare.None))
             using (var writer = new StreamWriter(fileStream))
             {
@@ -160,101 +164,72 @@ class Program
                 {
                     await writer.WriteLineAsync(item.ToString());
                 }
+                await writer.FlushAsync();
             }
-            await Task.Delay(100); // Delay to simulate long save time
-            saveStopWatch.Stop();
         }
         finally
         {
-            if (saveDebug) Console.WriteLine($"{bufferName} save complete in: {saveStopWatch.ElapsedMilliseconds} ms.");
+            if (saveDebug) Console.WriteLine($"{bufferName} save complete in: {fileMetricsTimerG.ElapsedMilliseconds} ms.");
             semaphore.Release();
         }
     }
 
-    static async Task<(long, long)> DoubleBufferLoad()
-    {
-        Stopwatch stopwatch = Stopwatch.StartNew();
-        Stopwatch waitTimer = new Stopwatch();
-        long totalWaitTime = 0;
 
-        List<int> bufferOne = new List<int>();
-        List<int> bufferTwo = new List<int>();
-        Task<List<int>> bufferOneLoading = Task.FromResult(new List<int>());
-        Task<List<int>> bufferTwoLoading = Task.FromResult(new List<int>());
+    static async Task<long> ReadFromFile(bool useDoubleBuffering)
+    {
+        ResetMetrics();
+
+        SemC.Buffer bufferOne = new SemC.Buffer(bufferSize, "Buffer 1");
+        SemC.Buffer bufferTwo = new SemC.Buffer(bufferSize, "Buffer 2");
         int activeBuffer = 1;
 
-        bufferOneLoading = LoadFromFile(bufferSize);
-
-        while (!bufferOneLoading.IsCompleted || !bufferTwoLoading.IsCompleted)
+        using (var fileStream = new FileStream(fileName, FileMode.Open, FileAccess.Read, FileShare.None))
+        using (var reader = new StreamReader(fileStream))
         {
-            if (activeBuffer == 1)
+            stopwatchG.Start();
+            string line;
+            while ((line = await reader.ReadLineAsync()) != null)
             {
-                waitTimer.Start();
-                bufferOne = await bufferOneLoading;
-                waitTimer.Stop();
-                totalWaitTime += waitTimer.ElapsedMilliseconds;
-                waitTimer.Reset();
-
-                ProcessData(bufferOne);  // Místo, kde se data zpracovávají
-
-                if (debug) Console.WriteLine("Buffer 1 is processed, loading new data.");
-                bufferOneLoading = LoadFromFile(bufferSize);
-                activeBuffer = 2;
-            }
-            else
-            {
-                waitTimer.Start();
-                bufferTwo = await bufferTwoLoading;
-                waitTimer.Stop();
-                totalWaitTime += waitTimer.ElapsedMilliseconds;
-                waitTimer.Reset();
-
-                ProcessData(bufferTwo);  // Místo, kde se data zpracovávají
-
-                if (debug) Console.WriteLine("Buffer 2 is processed, loading new data.");
-                bufferTwoLoading = LoadFromFile(bufferSize);
-                activeBuffer = 1;
-            }
-        }
-
-        stopwatch.Stop();
-        return (stopwatch.ElapsedMilliseconds, totalWaitTime);
-    }
-
-    static async Task<List<int>> LoadFromFile(int count)
-    {
-        List<int> buffer = new List<int>();
-        await semaphore.WaitAsync();
-        try
-        {
-            using (var fileStream = new FileStream(fileName, FileMode.Open, FileAccess.Read, FileShare.None))
-            using (var reader = new StreamReader(fileStream))
-            {
-                for (int i = 0; i < count; i++)
+                int number = int.Parse(line);
+                if (activeBuffer == 1)
                 {
-                    if (reader.EndOfStream)
-                        break;
-                    string line = await reader.ReadLineAsync();
-                    buffer.Add(int.Parse(line));
-                    if (debug) Console.WriteLine($"Loaded: {line}");
+                    bufferOne.Add(number);
+                    if (bufferOne.IsFull())
+                    {
+                        await ProcessBuffer(bufferOne);
+                        bufferOne.Clear();
+                        if (useDoubleBuffering) activeBuffer = 2;
+                    }
+                }
+                else
+                {
+                    bufferTwo.Add(number);
+                    if (bufferTwo.IsFull())
+                    {
+                        await ProcessBuffer(bufferTwo);
+                        bufferTwo.Clear();
+                        if (useDoubleBuffering) activeBuffer = 1;
+                    }
                 }
             }
+
+            // Zpracování zbývajícího obsahu v bufferech
+            if (!bufferOne.IsEmpty()) await ProcessBuffer(bufferOne);
+            if (!bufferTwo.IsEmpty()) await ProcessBuffer(bufferTwo);
+
+            stopwatchG.Stop();
         }
-        finally
-        {
-            semaphore.Release();
-        }
-        return buffer;
+
+        return stopwatchG.ElapsedMilliseconds;
     }
 
-    static void ProcessData(List<int> data)
+    static async Task ProcessBuffer(SemC.Buffer buffer)
     {
-        Console.WriteLine("Printing buffer:");
-        foreach (int oneData in data)
-        {
-            Console.WriteLine(oneData);
-        }
+        if (debug) Console.WriteLine($"Processing {buffer.name} with {buffer.Count()} items.");
+        //await Task.Delay(1); //Simulace zpracování bufferu
     }
+
+
 }
 
 
